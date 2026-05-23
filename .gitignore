@@ -1,0 +1,14 @@
+*.pth
+*.pt
+*.h5
+*.pkl
+*.ckpt
+*.las
+*.laz
+*.pcd
+*.shp
+*.tif
+data/
+outputs/
+logs/
+logs

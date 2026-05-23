@@ -1,0 +1,101 @@
+=== python ===
+/geogfs1/home/u3666068/miniconda3/envs/pc2wf/bin/python
+Python 3.8.20
+3.8.20 (default, Oct  3 2024, 15:24:27) 
+[GCC 11.2.0]
+Linux-4.18.0-553.el8_10.x86_64-x86_64-with-glibc2.17
+=== torch ===
+/geogfs1/home/u3666068/miniconda3/envs/pc2wf/lib/python3.8/site-packages/torch/cuda/__init__.py:145: UserWarning: 
+NVIDIA H100 PCIe with CUDA capability sm_90 is not compatible with the current PyTorch installation.
+The current PyTorch install supports CUDA capabilities sm_37 sm_50 sm_60 sm_61 sm_70 sm_75 sm_80 sm_86 compute_37.
+If you want to use the NVIDIA H100 PCIe GPU with PyTorch, please check the instructions at https://pytorch.org/get-started/locally/
+
+  warnings.warn(incompatible_device_warn.format(device_name, capability, " ".join(arch_list), device_name))
+torch= 1.11.0
+torch.cuda= 11.3
+cuda_available= True
+device_count= 1
+devices= ['NVIDIA H100 PCIe']
+capabilities= [(9, 0)]
+=== minkowski ===
+/geogfs1/home/u3666068/miniconda3/envs/pc2wf/lib/python3.8/site-packages/MinkowskiEngine-0.5.4-py3.8-linux-x86_64.egg/MinkowskiEngine/__init__.py:36: UserWarning: The environment variable `OMP_NUM_THREADS` not set. MinkowskiEngine will automatically set `OMP_NUM_THREADS=16`. If you want to set `OMP_NUM_THREADS` manually, please export it on the command line before running a python script. e.g. `export OMP_NUM_THREADS=12; python your_program.py`. It is recommended to set it below 24.
+  warnings.warn(
+MinkowskiEngine= 0.5.4
+module= /geogfs1/home/u3666068/miniconda3/envs/pc2wf/lib/python3.8/site-packages/MinkowskiEngine-0.5.4-py3.8-linux-x86_64.egg/MinkowskiEngine/__init__.py
+=== nvidia-smi ===
+Mon Mar 23 13:42:56 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 575.57.08              Driver Version: 575.57.08      CUDA Version: 12.9     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA H100 PCIe               Off |   00000000:03:00.0 Off |                    0 |
+| N/A   37C    P0             52W /  350W |      14MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   1  NVIDIA H100 PCIe               Off |   00000000:04:00.0 Off |                    0 |
+| N/A   59C    P0            268W /  350W |   76719MiB /  81559MiB |     60%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   2  NVIDIA H100 PCIe               Off |   00000000:45:00.0 Off |                    0 |
+| N/A   54C    P0            288W /  350W |   76849MiB /  81559MiB |    100%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   3  NVIDIA H100 PCIe               Off |   00000000:83:00.0 Off |                    0 |
+| N/A   33C    P0             49W /  350W |      14MiB /  81559MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   4  NVIDIA H100 PCIe               Off |   00000000:C3:00.0 Off |                    0 |
+| N/A   54C    P0            173W /  350W |   76721MiB /  81559MiB |    100%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+|   5  NVIDIA H100 PCIe               Off |   00000000:C4:00.0 Off |                    0 |
+| N/A   71C    P0            346W /  350W |   42409MiB /  81559MiB |    100%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+                                                                                         
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            7518      G   /usr/libexec/Xorg                         4MiB |
+|    1   N/A  N/A            7518      G   /usr/libexec/Xorg                         4MiB |
+|    1   N/A  N/A         3007617      C   ...nda3/envs/torch2.4/bin/python      76694MiB |
+|    2   N/A  N/A            7518      G   /usr/libexec/Xorg                         4MiB |
+|    2   N/A  N/A         3772561      C   ...nda3/envs/torch2.4/bin/python      76824MiB |
+|    3   N/A  N/A            7518      G   /usr/libexec/Xorg                         4MiB |
+|    4   N/A  N/A            7518      G   /usr/libexec/Xorg                         4MiB |
+|    4   N/A  N/A         3911616      C   ...nda3/envs/torch2.4/bin/python      76696MiB |
+|    5   N/A  N/A            7518      G   /usr/libexec/Xorg                         4MiB |
+|    5   N/A  N/A         3575749      C   python                                42386MiB |
++-----------------------------------------------------------------------------------------+
+=== nvcc ===
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Tue_May_27_02:21:03_PDT_2025
+Cuda compilation tools, release 12.9, V12.9.86
+Build cuda_12.9.r12.9/compiler.36037853_0
+=== gcc ===
+gcc (GCC) 8.5.0 20210514 (Red Hat 8.5.0-28)
+Copyright (C) 2018 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+g++ (GCC) 8.5.0 20210514 (Red Hat 8.5.0-28)
+Copyright (C) 2018 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+=== conda list ===
+cudatoolkit                11.3.1           h2bc3f7f_2
+cudatoolkit-dev            11.3.1           py38h497a2fe_0               conda-forge
+minkowskiengine            0.5.4            pypi_0                       pypi
+numpy                      1.24.3           py38hf6e8229_1
+numpy-base                 1.24.3           py38h060ed82_1
+pytorch                    1.11.0           py3.8_cuda11.3_cudnn8.2.0_0  pytorch
+pytorch-mutex              1.0              cuda                         pytorch
+scipy                      1.10.1           pypi_0                       pypi
+torchvision                0.12.0           py38_cu113                   pytorch
