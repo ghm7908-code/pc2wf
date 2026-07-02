@@ -31,11 +31,14 @@ PYTHONNOUSERSITE="${PYTHONNOUSERSITE:-1}"
 EVAL="${EVAL:-0}"
 EVAL_VERTEX_TH="${EVAL_VERTEX_TH:-0.03}"
 EVAL_EDGE_TH="${EVAL_EDGE_TH:-0.05}"
-EVAL_REPORT="${EVAL_REPORT:-$PROJECT_ROOT/visualize/eval_patch${PATCH_SIZE}sigma${SIGMA}clip${CLIP}_${SPLIT}.json}"
+EVAL_REPORT="${EVAL_REPORT:-$PROJECT_ROOT/eval_ap_patch${PATCH_SIZE}sigma${SIGMA}clip${CLIP}_${SPLIT}.json}"
+EVAL_CSV="${EVAL_CSV:-$PROJECT_ROOT/eval_ap_patch${PATCH_SIZE}sigma${SIGMA}clip${CLIP}_${SPLIT}.csv}"
 THRESHOLD_PROFILE="${THRESHOLD_PROFILE:-default}"
 
 RESULT_DIR="${RESULT_DIR:-$PROJECT_ROOT/visualize/run_test_result/patch${PATCH_SIZE}sigma${SIGMA}clip${CLIP}_${SPLIT}}"
 OBJ_DIR="${OBJ_DIR:-$PROJECT_ROOT/visualize/visualize_line/patch${PATCH_SIZE}sigma${SIGMA}clip${CLIP}_${SPLIT}}"
+TEST_LIST="${TEST_LIST:-/geogfs1/groups/hkurs/u3666068mgh/Tallin/test/test_list.txt}"
+AUTO_EVAL="${AUTO_EVAL:-1}"
 
 # Prediction thresholds (run_test_line.py)
 PATCH_PROB_TH="${PATCH_PROB_TH:-}"
@@ -111,10 +114,14 @@ echo "OMP_NUM_THREADS=$OMP_NUM_THREADS"
 echo "PATCH_SIZE=$PATCH_SIZE SIGMA=$SIGMA CLIP=$CLIP SPLIT=$SPLIT"
 echo "RESULT_DIR=$RESULT_DIR"
 echo "OBJ_DIR=$OBJ_DIR"
+echo "TEST_LIST=$TEST_LIST"
+echo "AUTO_EVAL=$AUTO_EVAL"
 echo "THRESHOLD_PROFILE=$THRESHOLD_PROFILE"
 echo "PATCH_PROB_TH=$PATCH_PROB_TH LINE_PROB_TH=$LINE_PROB_TH VERTEX_NMS_TH=$VERTEX_NMS_TH LINE_DIST_TH=$LINE_DIST_TH"
 echo "VERTEX_PROB_TH=$VERTEX_PROB_TH VIS_VERTEX_NMS_TH=$VIS_VERTEX_NMS_TH VIS_LINE_PROB_TH=$VIS_LINE_PROB_TH VIS_LINE_LEN_TH=$VIS_LINE_LEN_TH VIS_LINE_NMS_TH=$VIS_LINE_NMS_TH MERGE_TH=$MERGE_TH"
 echo "EVAL=$EVAL EVAL_VERTEX_TH=$EVAL_VERTEX_TH EVAL_EDGE_TH=$EVAL_EDGE_TH"
+echo "EVAL_REPORT=$EVAL_REPORT"
+echo "EVAL_CSV=$EVAL_CSV"
 echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
 echo "LD_PRELOAD=${LD_PRELOAD:-}"
 
@@ -163,6 +170,10 @@ RUN_TEST_CMD=(
   --line_dist_th "$LINE_DIST_TH"
 )
 
+if [ -n "$TEST_LIST" ] && [ -f "$TEST_LIST" ]; then
+  RUN_TEST_CMD+=(--test_list "$TEST_LIST")
+fi
+
 if [ "$OVERWRITE" = "1" ]; then
   RUN_TEST_CMD+=(--overwrite)
 fi
@@ -171,30 +182,88 @@ echo "Running prediction..."
 "${RUN_TEST_CMD[@]}"
 
 echo "Running OBJ export..."
-python "$PROJECT_ROOT/visualize/visualize_line.py" \
-  --patch_size "$PATCH_SIZE" \
-  --sigma "$SIGMA" \
-  --clip "$CLIP" \
-  --result_dir "$RESULT_DIR" \
-  --save_dir "$OBJ_DIR" \
-  --vertex_prob_th "$VERTEX_PROB_TH" \
-  --vertex_nms_th "$VIS_VERTEX_NMS_TH" \
-  --line_prob_th "$VIS_LINE_PROB_TH" \
-  --line_len_th "$VIS_LINE_LEN_TH" \
-  --line_nms_th "$VIS_LINE_NMS_TH" \
+VIS_CMD=(
+  python "$PROJECT_ROOT/visualize/visualize_line.py"
+  --patch_size "$PATCH_SIZE"
+  --sigma "$SIGMA"
+  --clip "$CLIP"
+  --result_dir "$RESULT_DIR"
+  --save_dir "$OBJ_DIR"
+  --vertex_prob_th "$VERTEX_PROB_TH"
+  --vertex_nms_th "$VIS_VERTEX_NMS_TH"
+  --line_prob_th "$VIS_LINE_PROB_TH"
+  --line_len_th "$VIS_LINE_LEN_TH"
+  --line_nms_th "$VIS_LINE_NMS_TH"
   --merge_th "$MERGE_TH"
+)
+
+if [ -n "$TEST_LIST" ] && [ -f "$TEST_LIST" ]; then
+  VIS_CMD+=(--test_list "$TEST_LIST")
+fi
+
+# Locate ground-truth OBJ directory for integrated APCalculator evaluation
+EVAL_GT_DIR=""
+for _gt_name in gt wireframe; do
+  if [ -d "$DATA_ROOT/$SPLIT/$_gt_name" ]; then
+    EVAL_GT_DIR="$DATA_ROOT/$SPLIT/$_gt_name"
+    break
+  fi
+done
+if [ -z "$EVAL_GT_DIR" ]; then
+  EVAL_GT_DIR="$DATA_ROOT/$SPLIT/gt"
+fi
+
+if [ "$AUTO_EVAL" = "1" ] && [ -d "$EVAL_GT_DIR" ]; then
+  VIS_CMD+=(
+    --gt_dir "$EVAL_GT_DIR"
+    --eval_json "$EVAL_REPORT"
+    --eval_csv "$EVAL_CSV"
+    --eval_distance_thresh "$EVAL_VERTEX_TH"
+  )
+  echo "APCalculator evaluation enabled: GT dir = $EVAL_GT_DIR"
+else
+  echo "APCalculator evaluation skipped (AUTO_EVAL=$AUTO_EVAL, GT dir exists: $([ -d "$EVAL_GT_DIR" ] && echo yes || echo no))"
+fi
+
+"${VIS_CMD[@]}"
 
 obj_count="$(find "$OBJ_DIR" -maxdepth 1 -type f -name '*_pred.obj' | wc -l | tr -d ' ')"
 echo "Done. Exported OBJ count: $obj_count"
 echo "OBJ output dir: $OBJ_DIR"
 
-if [ "$EVAL" = "1" ]; then
-  echo "Running wireframe evaluation..."
-  python "$PROJECT_ROOT/visualize/evaluate_wireframe.py" \
-    --data_root "$DATA_ROOT" \
-    --split "$SPLIT" \
-    --obj_dir "$OBJ_DIR" \
-    --vertex_th "$EVAL_VERTEX_TH" \
-    --edge_th "$EVAL_EDGE_TH" \
-    --report_path "$EVAL_REPORT"
+if [ "$EVAL" = "1" ] && [ "$AUTO_EVAL" != "1" ]; then
+  # Legacy evaluation path: only runs if AUTO_EVAL is disabled (avoids double evaluation).
+  # When AUTO_EVAL=1 (default), evaluation is already integrated into visualize_line.py above.
+  EVAL_GT_DIR=""
+  for _gt_name in gt wireframe; do
+    if [ -d "$DATA_ROOT/$SPLIT/$_gt_name" ]; then
+      EVAL_GT_DIR="$DATA_ROOT/$SPLIT/$_gt_name"
+      break
+    fi
+  done
+  if [ -z "$EVAL_GT_DIR" ]; then
+    EVAL_GT_DIR="$DATA_ROOT/$SPLIT/gt"
+  fi
+
+  if [ ! -d "$EVAL_GT_DIR" ]; then
+    echo "Warning: GT directory not found at $EVAL_GT_DIR — skipping evaluation." >&2
+  else
+    echo "Running wireframe evaluation (APCalculator) — legacy path..."
+    echo "  Pred dir: $OBJ_DIR"
+    echo "  GT dir:   $EVAL_GT_DIR"
+    echo "  distance_thresh: $EVAL_VERTEX_TH"
+    NAMES_ARG=()
+    if [ -n "$TEST_LIST" ] && [ -f "$TEST_LIST" ]; then
+      NAMES_ARG=(--names_file "$TEST_LIST")
+    fi
+    python "$PROJECT_ROOT/evaluate_wireframe.py" \
+      --pred_dir "$OBJ_DIR" \
+      --gt_dir "$EVAL_GT_DIR" \
+      --pred_ext "_pred.obj" \
+      --gt_ext ".obj" \
+      --distance_thresh "$EVAL_VERTEX_TH" \
+      --output_json "$EVAL_REPORT" \
+      --output_csv "$EVAL_CSV" \
+      "${NAMES_ARG[@]}"
+  fi
 fi

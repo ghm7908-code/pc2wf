@@ -249,6 +249,7 @@ if __name__ == "__main__":
     parser.add_argument('--vertex_nms_th', type=float, default=0.01)
     parser.add_argument('--line_dist_th', type=float, default=0.03)
     parser.add_argument('--overwrite', action='store_true')
+    parser.add_argument('--test_list', type=str, default='', help='Path to test_list.txt containing point cloud names to filter.')
     args = parser.parse_args()
 
     sigma = args.sigma
@@ -275,6 +276,20 @@ if __name__ == "__main__":
 
     test_file_list = glob(test_glob)
     test_file_list.sort()
+
+    if args.test_list:
+        with open(args.test_list, 'r', encoding='utf-8') as f:
+            filter_names = {line.strip() for line in f if line.strip()}
+        print(f'Loaded {len(filter_names)} names from test_list: {args.test_list}')
+        filtered_list = []
+        for fpath in test_file_list:
+            stem = os.path.basename(fpath).replace('.down', '')
+            for name in filter_names:
+                if stem == name or stem.startswith(name + '_') or stem.startswith(name + '-'):
+                    filtered_list.append(fpath)
+                    break
+        print(f'Filtered test files: {len(test_file_list)} -> {len(filtered_list)}')
+        test_file_list = filtered_list
 
     import torch
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
