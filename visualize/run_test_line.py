@@ -282,14 +282,21 @@ if __name__ == "__main__":
         with open(args.test_list, 'r', encoding='utf-8') as f:
             filter_names = {line.strip() for line in f if line.strip()}
         print(f'Loaded {len(filter_names)} names from test_list: {args.test_list}')
-        patterns = {name: re.compile(r'^' + re.escape(name) + r'(?:_\d+)?$') for name in filter_names}
+        # Naming: {cloud_name}{patch_digits} with NO separator (e.g. "1001" + "0" = "10010")
+        # Match if filename stem starts with a test_list name and remainder is all digits.
+        # Use longest match to avoid ambiguity (e.g. "10010" should match "10010", not "1001").
+        patterns = {name: re.compile(r'^' + re.escape(name) + r'(\d*)$') for name in filter_names}
         filtered_list = []
         for fpath in test_file_list:
             stem = os.path.basename(fpath).replace('.down', '')
+            best_name = None
+            best_len = 0
             for name, pat in patterns.items():
-                if pat.match(stem):
-                    filtered_list.append(fpath)
-                    break
+                if pat.match(stem) and len(name) > best_len:
+                    best_name = name
+                    best_len = len(name)
+            if best_name:
+                filtered_list.append(fpath)
         print(f'Filtered test files: {len(test_file_list)} -> {len(filtered_list)}')
         test_file_list = filtered_list
 

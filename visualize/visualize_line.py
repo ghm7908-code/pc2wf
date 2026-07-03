@@ -542,33 +542,47 @@ def resolve_pairs(pred_dir, gt_dir, pred_ext, gt_ext, names_file):
 
 
 def _is_patch_name(stem, base_name):
-    """Check if stem is a patch of base_name: base_name + _N (digits only)."""
+    """Check if stem is a patch of base_name: base_name + digits."""
     if stem == base_name:
         return True
-    suffix = stem[len(base_name):]
-    if suffix.startswith("_") and suffix[1:].isdigit():
-        return True
+    if stem.startswith(base_name):
+        suffix = stem[len(base_name):]
+        return suffix.isdigit()
     return False
 
 
-def _strip_patch_suffix(stem):
-    """Strip trailing _N (digits) to get base point cloud name. Returns (base, is_patch)."""
-    import re
-    m = re.match(r"^(.+)_(\d+)$", stem)
-    if m:
-        return m.group(1), True
-    return stem, False
-
-
-def merge_patch_preds_to_pointcloud(pred_dir, merge_th=0.02):
-    """Merge per-patch _pred.obj files into per-point-cloud _pred.obj files.
-
-    Groups files like 'building1_0_pred.obj', 'building1_1_pred.obj'
-    into a single 'building1_pred.obj' by merging vertices and edges.
-    Returns the number of merged point clouds.
+def _strip_patch_suffix_with_names(stem, known_names):
+    """Strip trailing digits if the stem matches a known point-cloud name prefix.
+    Returns (base, is_patch). Requires known_names to resolve ambiguity.
     """
     import re
+    # Find longest known name that is a prefix, where remainder is all digits
+    best = stem  # fallback: no match, keep as-is
+    best_len = 0
+    for name in known_names:
+        if stem.startswith(name):
+            suffix = stem[len(name):]
+            if suffix == "" or suffix.isdigit():
+                if len(name) > best_len:
+                    best = name
+                    best_len = len(name)
+    return best, (best != stem)
+
+
+def merge_patch_preds_to_pointcloud(pred_dir, names_file, merge_th=0.02):
+    """Merge per-patch _pred.obj files into per-point-cloud _pred.obj files.
+
+    Groups files like '10010_pred.obj' (cloud 1001, patch 0) into
+    a single '1001_pred.obj' using known cloud names from names_file.
+    Returns the number of merged point clouds.
+    """
     from collections import defaultdict
+
+    # Load known cloud names
+    known_names = set()
+    if names_file:
+        with open(names_file, "r", encoding="utf-8") as f:
+            known_names = {line.strip() for line in f if line.strip()}
 
     pred_dir = Path(pred_dir)
     pred_files = sorted(pred_dir.glob("*_pred.obj"))
@@ -578,19 +592,20 @@ def merge_patch_preds_to_pointcloud(pred_dir, merge_th=0.02):
     # Group by base point cloud name
     groups = defaultdict(list)
     for f in pred_files:
-        stem = f.stem  # e.g. "building1_0_pred"
-        # Strip _pred suffix
+        stem = f.stem  # e.g. "10010_pred"
         if stem.endswith("_pred"):
             stem = stem[:-len("_pred")]
-        # Try to extract base name
-        base, is_patch = _strip_patch_suffix(stem)
+        if known_names:
+            base, _is_patch = _strip_patch_suffix_with_names(stem, known_names)
+        else:
+            base = stem
         groups[base].append(f)
 
-    # Only merge groups that have multiple patches; single-patch groups are already fine
+    # Only merge groups that have multiple patches
     merged_count = 0
     for base_name, files in groups.items():
         if len(files) == 1:
-            # Single patch: rename to base_name_pred.obj if needed
+            # Single file: rename if needed
             expected_name = pred_dir / f"{base_name}_pred.obj"
             if files[0] != expected_name:
                 try:
@@ -623,15 +638,12 @@ def merge_patch_preds_to_pointcloud(pred_dir, merge_th=0.02):
 
         all_vertices = np.array(all_vertices, dtype=np.float64)
 
-        # Remap edge indices to be contiguous 0-based
-        # First, merge close vertices
+        # Merge close vertices and remap edge indices
         n = len(all_vertices)
-        merged_vertices = []
-        vertex_map = {}  # old_idx -> new_idx
+        vertex_map = {}
         for i in range(n):
             if i in vertex_map:
                 continue
-            # Find all close vertices
             for j in range(i + 1, n):
                 if j in vertex_map:
                     continue
@@ -639,20 +651,19 @@ def merge_patch_preds_to_pointcloud(pred_dir, merge_th=0.02):
                     vertex_map[j] = i
             vertex_map[i] = i
 
-        # Build new vertex list (only keep representative vertices)
         old_to_new = {}
+        merged_vertices_list = []
         new_idx = 0
         for i in range(n):
             rep = vertex_map.get(i, i)
             if rep not in old_to_new:
                 old_to_new[rep] = new_idx
-                merged_vertices.append(all_vertices[rep])
+                merged_vertices_list.append(all_vertices[rep])
                 new_idx += 1
             old_to_new[i] = old_to_new[rep]
 
-        merged_vertices = np.array(merged_vertices, dtype=np.float64)
+        merged_vertices = np.array(merged_vertices_list, dtype=np.float64)
 
-        # Remap edges
         new_edges = set()
         for edge in all_edges:
             s, e = edge
@@ -665,7 +676,6 @@ def merge_patch_preds_to_pointcloud(pred_dir, merge_th=0.02):
         if not new_edges or len(merged_vertices) == 0:
             continue
 
-        # Export merged OBJ
         merged_path = pred_dir / f"{base_name}_pred.obj"
         with open(merged_path, "w", encoding="utf-8") as fh:
             for v in merged_vertices:
@@ -673,7 +683,6 @@ def merge_patch_preds_to_pointcloud(pred_dir, merge_th=0.02):
             for s, e in sorted(new_edges):
                 fh.write(f"l {s + 1} {e + 1}\n")
 
-        # Remove old per-patch OBJ files
         for f in files:
             try:
                 f.unlink()
@@ -699,7 +708,7 @@ def write_eval_csv(output_csv, results):
 
 def run_ap_evaluation(pred_dir, gt_dir, output_json, output_csv, distance_thresh, names_file):
     # First, merge per-patch _pred.obj into per-point-cloud _pred.obj
-    merged = merge_patch_preds_to_pointcloud(pred_dir)
+    merged = merge_patch_preds_to_pointcloud(pred_dir, names_file)
     if merged > 0:
         print(f"Merged {merged} point clouds from patch-level OBJ files.")
 
@@ -793,14 +802,20 @@ if __name__ == "__main__":
         with open(args.test_list, 'r', encoding='utf-8') as f:
             filter_names = {line.strip() for line in f if line.strip()}
         print(f'Loaded {len(filter_names)} names from test_list: {args.test_list}')
-        patterns = {name: re.compile(r'^' + re.escape(name) + r'(?:_\d+)?$') for name in filter_names}
+        # Naming: {cloud_name}{patch_digits} with NO separator (e.g. "1001" + "0" = "10010")
+        # Use longest match to avoid ambiguity.
+        patterns = {name: re.compile(r'^' + re.escape(name) + r'(\d*)$') for name in filter_names}
         filtered_list = []
         for fpath in vertex_pred_list:
             stem = os.path.basename(fpath).replace('_vertex.txt', '')
+            best_name = None
+            best_len = 0
             for name, pat in patterns.items():
-                if pat.match(stem):
-                    filtered_list.append(fpath)
-                    break
+                if pat.match(stem) and len(name) > best_len:
+                    best_name = name
+                    best_len = len(name)
+            if best_name:
+                filtered_list.append(fpath)
         print(f'Filtered vertex files: {len(vertex_pred_list)} -> {len(filtered_list)}')
         vertex_pred_list = filtered_list
     exported = 0
