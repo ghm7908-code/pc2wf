@@ -516,15 +516,173 @@ def build_batch(pred_obj, gt_obj):
 def resolve_pairs(pred_dir, gt_dir, pred_ext, gt_ext, names_file):
     pred_dir = Path(pred_dir)
     gt_dir = Path(gt_dir)
-    pred_map = {path.stem: path for path in pred_dir.glob(f"*{pred_ext}")}
-    gt_map = {path.stem: path for path in gt_dir.glob(f"*{gt_ext}")}
+    # Pred files are named like "foo_pred.obj"; GT files are "foo.obj".
+    # Strip the _pred suffix from pred stems so they match GT stems.
+    pred_suffix = pred_ext.lstrip("*")
+    _pred_tag = "_pred"
+    raw_pred_map = {}
+    for path in pred_dir.glob(f"*{pred_ext}"):
+        stem = path.stem
+        if stem.endswith(_pred_tag):
+            stem = stem[:-len(_pred_tag)]
+        raw_pred_map[stem] = path
+    raw_gt_map = {path.stem: path for path in gt_dir.glob(f"*{gt_ext}")}
     if names_file:
         with open(names_file, "r", encoding="utf-8") as handle:
             selected = {line.strip() for line in handle if line.strip()}
-        pred_map = {name: path for name, path in pred_map.items() if name in selected}
-        gt_map = {name: path for name, path in gt_map.items() if name in selected}
+        pred_map = {name: path for name, path in raw_pred_map.items() if name in selected}
+        gt_map = {name: path for name, path in raw_gt_map.items() if name in selected}
+    else:
+        pred_map = raw_pred_map
+        gt_map = raw_gt_map
     common_names = sorted(pred_map.keys() & gt_map.keys())
-    return [(name, pred_map[name], gt_map[name]) for name in common_names]
+    missing_pred = sorted(gt_map.keys() - pred_map.keys())
+    missing_gt = sorted(pred_map.keys() - gt_map.keys())
+    return [(name, pred_map[name], gt_map[name]) for name in common_names], missing_pred, missing_gt
+
+
+def _is_patch_name(stem, base_name):
+    """Check if stem is a patch of base_name: base_name + _N (digits only)."""
+    if stem == base_name:
+        return True
+    suffix = stem[len(base_name):]
+    if suffix.startswith("_") and suffix[1:].isdigit():
+        return True
+    return False
+
+
+def _strip_patch_suffix(stem):
+    """Strip trailing _N (digits) to get base point cloud name. Returns (base, is_patch)."""
+    import re
+    m = re.match(r"^(.+)_(\d+)$", stem)
+    if m:
+        return m.group(1), True
+    return stem, False
+
+
+def merge_patch_preds_to_pointcloud(pred_dir, merge_th=0.02):
+    """Merge per-patch _pred.obj files into per-point-cloud _pred.obj files.
+
+    Groups files like 'building1_0_pred.obj', 'building1_1_pred.obj'
+    into a single 'building1_pred.obj' by merging vertices and edges.
+    Returns the number of merged point clouds.
+    """
+    import re
+    from collections import defaultdict
+
+    pred_dir = Path(pred_dir)
+    pred_files = sorted(pred_dir.glob("*_pred.obj"))
+    if not pred_files:
+        return 0
+
+    # Group by base point cloud name
+    groups = defaultdict(list)
+    for f in pred_files:
+        stem = f.stem  # e.g. "building1_0_pred"
+        # Strip _pred suffix
+        if stem.endswith("_pred"):
+            stem = stem[:-len("_pred")]
+        # Try to extract base name
+        base, is_patch = _strip_patch_suffix(stem)
+        groups[base].append(f)
+
+    # Only merge groups that have multiple patches; single-patch groups are already fine
+    merged_count = 0
+    for base_name, files in groups.items():
+        if len(files) == 1:
+            # Single patch: rename to base_name_pred.obj if needed
+            expected_name = pred_dir / f"{base_name}_pred.obj"
+            if files[0] != expected_name:
+                try:
+                    files[0].rename(expected_name)
+                    merged_count += 1
+                except OSError:
+                    pass
+            continue
+
+        # Merge multiple patches
+        all_vertices = []
+        all_edges = []
+        for f in files:
+            with open(f, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if parts[0] == "v":
+                        all_vertices.append([float(v) for v in parts[1:4]])
+                    elif parts[0] == "l":
+                        idxs = [int(p.split("/")[0]) - 1 for p in parts[1:]]
+                        for s, e in zip(idxs[:-1], idxs[1:]):
+                            if s != e:
+                                all_edges.append(tuple(sorted((s, e))))
+
+        if not all_vertices:
+            continue
+
+        all_vertices = np.array(all_vertices, dtype=np.float64)
+
+        # Remap edge indices to be contiguous 0-based
+        # First, merge close vertices
+        n = len(all_vertices)
+        merged_vertices = []
+        vertex_map = {}  # old_idx -> new_idx
+        for i in range(n):
+            if i in vertex_map:
+                continue
+            # Find all close vertices
+            for j in range(i + 1, n):
+                if j in vertex_map:
+                    continue
+                if np.linalg.norm(all_vertices[i] - all_vertices[j]) < merge_th:
+                    vertex_map[j] = i
+            vertex_map[i] = i
+
+        # Build new vertex list (only keep representative vertices)
+        old_to_new = {}
+        new_idx = 0
+        for i in range(n):
+            rep = vertex_map.get(i, i)
+            if rep not in old_to_new:
+                old_to_new[rep] = new_idx
+                merged_vertices.append(all_vertices[rep])
+                new_idx += 1
+            old_to_new[i] = old_to_new[rep]
+
+        merged_vertices = np.array(merged_vertices, dtype=np.float64)
+
+        # Remap edges
+        new_edges = set()
+        for edge in all_edges:
+            s, e = edge
+            if s >= n or e >= n:
+                continue
+            ns, ne = old_to_new.get(s, s), old_to_new.get(e, e)
+            if ns != ne:
+                new_edges.add(tuple(sorted((ns, ne))))
+
+        if not new_edges or len(merged_vertices) == 0:
+            continue
+
+        # Export merged OBJ
+        merged_path = pred_dir / f"{base_name}_pred.obj"
+        with open(merged_path, "w", encoding="utf-8") as fh:
+            for v in merged_vertices:
+                fh.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+            for s, e in sorted(new_edges):
+                fh.write(f"l {s + 1} {e + 1}\n")
+
+        # Remove old per-patch OBJ files
+        for f in files:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+        merged_count += 1
+
+    return merged_count
 
 
 def write_eval_csv(output_csv, results):
@@ -540,6 +698,11 @@ def write_eval_csv(output_csv, results):
 
 
 def run_ap_evaluation(pred_dir, gt_dir, output_json, output_csv, distance_thresh, names_file):
+    # First, merge per-patch _pred.obj into per-point-cloud _pred.obj
+    merged = merge_patch_preds_to_pointcloud(pred_dir)
+    if merged > 0:
+        print(f"Merged {merged} point clouds from patch-level OBJ files.")
+
     pairs, missing_pred, missing_gt = resolve_pairs(
         pred_dir, gt_dir, "_pred.obj", ".obj", names_file
     )
@@ -626,14 +789,16 @@ if __name__ == "__main__":
     vertex_pred_list.sort()
 
     if args.test_list:
+        import re
         with open(args.test_list, 'r', encoding='utf-8') as f:
             filter_names = {line.strip() for line in f if line.strip()}
         print(f'Loaded {len(filter_names)} names from test_list: {args.test_list}')
+        patterns = {name: re.compile(r'^' + re.escape(name) + r'(?:_\d+)?$') for name in filter_names}
         filtered_list = []
         for fpath in vertex_pred_list:
             stem = os.path.basename(fpath).replace('_vertex.txt', '')
-            for name in filter_names:
-                if stem == name or stem.startswith(name + '_') or stem.startswith(name + '-'):
+            for name, pat in patterns.items():
+                if pat.match(stem):
                     filtered_list.append(fpath)
                     break
         print(f'Filtered vertex files: {len(vertex_pred_list)} -> {len(filtered_list)}')

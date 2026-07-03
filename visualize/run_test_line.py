@@ -278,14 +278,16 @@ if __name__ == "__main__":
     test_file_list.sort()
 
     if args.test_list:
+        import re
         with open(args.test_list, 'r', encoding='utf-8') as f:
             filter_names = {line.strip() for line in f if line.strip()}
         print(f'Loaded {len(filter_names)} names from test_list: {args.test_list}')
+        patterns = {name: re.compile(r'^' + re.escape(name) + r'(?:_\d+)?$') for name in filter_names}
         filtered_list = []
         for fpath in test_file_list:
             stem = os.path.basename(fpath).replace('.down', '')
-            for name in filter_names:
-                if stem == name or stem.startswith(name + '_') or stem.startswith(name + '-'):
+            for name, pat in patterns.items():
+                if pat.match(stem):
                     filtered_list.append(fpath)
                     break
         print(f'Filtered test files: {len(test_file_list)} -> {len(filtered_list)}')
