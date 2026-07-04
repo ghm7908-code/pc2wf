@@ -40,6 +40,15 @@ fi
 
 export OMP_NUM_THREADS
 export PYTHONNOUSERSITE
+export CUDA_HOME="${CONDA_PREFIX:-}"
+if [ -n "$CUDA_HOME" ]; then
+  export PATH="$CUDA_HOME/bin:$PATH"
+  export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+  # Prefer conda's C++ runtime to avoid GLIBCXX mismatch with MinkowskiEngine backend.
+  if [ -f "$CUDA_HOME/lib/libstdc++.so.6" ]; then
+    export LD_PRELOAD="$CUDA_HOME/lib/libstdc++.so.6${LD_PRELOAD:+:$LD_PRELOAD}"
+  fi
+fi
 
 echo "============================================"
 echo "Regenerating test patches (filtered by test_list)"
