@@ -476,6 +476,7 @@ def process_split(
     patch_vertex_threshold,
     line_dist_threshold,
     rebuild=False,
+    names_file=None,
 ):
     actual_split = _resolve_split_name(noise_root, split)
     if actual_split is None:
@@ -484,6 +485,13 @@ def process_split(
 
     xyz_dir = Path(noise_root) / actual_split / "xyz"
     file_list = sorted(xyz_dir.glob("*.xyz"))
+
+    if names_file:
+        with open(names_file, 'r', encoding='utf-8') as f:
+            names = {line.strip() for line in f if line.strip()}
+        file_list = [fp for fp in file_list if fp.stem in names]
+        print(f"Filtered by names_file: {len(names)} names loaded, {len(file_list)} files matched.")
+
     split_output_dir = Path(output_root) / split
 
     if rebuild and split_output_dir.exists():
@@ -553,6 +561,8 @@ if __name__ == "__main__":
         help="Max distance for matching GT line endpoints and interpolated line samples.",
     )
     parser.add_argument("--rebuild", action="store_true", help="Delete old patch outputs before regenerating.")
+    parser.add_argument("--names_file", type=str, default="", help="Path to a file listing cloud names (one per line) to filter which clouds to process.")
+    parser.add_argument("--split", type=str, default="", help="Only process this split (train/validation/test). If empty, process all.")
     args = parser.parse_args()
 
     noise_root = Path(args.noise_root) if args.noise_root else Path(args.data_root) / f"noise_sigma{args.sigma}clip{args.clip}"
@@ -562,7 +572,10 @@ if __name__ == "__main__":
         else Path(args.data_root) / f"patches_{args.patch_size}_noise_sigma{args.sigma}clip{args.clip}"
     )
 
-    for split_name in ("train", "validation", "test"):
+    names_file = args.names_file if args.names_file else None
+    splits_to_run = [args.split] if args.split else ["train", "validation", "test"]
+
+    for split_name in splits_to_run:
         process_split(
             noise_root=noise_root,
             output_root=output_root,
@@ -576,4 +589,5 @@ if __name__ == "__main__":
             patch_vertex_threshold=args.patch_vertex_threshold,
             line_dist_threshold=args.line_dist_threshold,
             rebuild=args.rebuild,
+            names_file=names_file,
         )

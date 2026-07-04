@@ -121,7 +121,7 @@ def _add_noise_one_file(args):
         return False, file_name, str(exc)
 
 
-def process_split(data_root, dst_noise_root, canonical_split, sigma, clip, num_workers):
+def process_split(data_root, dst_noise_root, canonical_split, sigma, clip, num_workers, names_file=None):
     source_split = _resolve_split_name(data_root, canonical_split)
     if source_split is None:
         print(f"Skip {canonical_split}: {data_root}/{canonical_split}/xyz not found.")
@@ -131,6 +131,12 @@ def process_split(data_root, dst_noise_root, canonical_split, sigma, clip, num_w
     xyz_dir = split_root / "xyz"
     gt_dir_name = _find_gt_dir(split_root)
     file_list = sorted(xyz_dir.glob("*.xyz"))
+
+    if names_file:
+        with open(names_file, 'r', encoding='utf-8') as f:
+            names = {line.strip() for line in f if line.strip()}
+        file_list = [fp for fp in file_list if fp.stem in names]
+        print(f"Filtered by names_file: {len(names)} names loaded, {len(file_list)} files matched.")
 
     print(f"Processing {canonical_split}: found {len(file_list)} files from split '{source_split}'.")
     if gt_dir_name is None and canonical_split != "test":
@@ -162,13 +168,18 @@ if __name__ == "__main__":
     parser.add_argument("--clip", type=float, default=0.01, help="Gaussian noise clip.")
     parser.add_argument("--num_workers", type=int, default=1, help="Number of worker processes.")
     parser.add_argument("--rebuild", action="store_true", help="Delete the old noise directory before regenerating.")
+    parser.add_argument("--names_file", type=str, default="", help="Path to a file listing cloud names (one per line) to filter which clouds to process.")
+    parser.add_argument("--split", type=str, default="", help="Only process this split (train/validation/test). If empty, process all.")
     args = parser.parse_args()
 
     dst_noise_root = Path(args.data_root) / f"noise_sigma{args.sigma}clip{args.clip}"
     if args.rebuild and dst_noise_root.exists():
         shutil.rmtree(dst_noise_root)
 
-    for split_name in ("train", "validation", "test"):
+    names_file = args.names_file if args.names_file else None
+    splits_to_run = [args.split] if args.split else ["train", "validation", "test"]
+
+    for split_name in splits_to_run:
         process_split(
             data_root=args.data_root,
             dst_noise_root=dst_noise_root,
@@ -176,4 +187,5 @@ if __name__ == "__main__":
             sigma=args.sigma,
             clip=args.clip,
             num_workers=args.num_workers,
+            names_file=names_file,
         )

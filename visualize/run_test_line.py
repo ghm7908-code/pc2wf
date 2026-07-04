@@ -7,6 +7,7 @@ import random
 import numpy as np
 from glob import glob
 import argparse
+from scipy.spatial import cKDTree
 
 
 def _safe_loadtxt(path, dtype, empty_shape=None):
@@ -112,6 +113,9 @@ def predict(
     if len(pc_down) == 0 or len(feats) == 0 or len(coords) == 0 or len(patch_index) == 0:
         return np.empty((0, 3)), np.empty((0,)), np.empty((0, 2), dtype=np.int32), np.empty((0,))
 
+    # Build KD-tree once for fast batched nearest-neighbour queries
+    kdtree = cKDTree(pc_down.astype(np.float64))
+
     with torch.inference_mode():
         stensor = sparse_tensor(
             ME,
@@ -137,7 +141,7 @@ def predict(
         batch_coords = pc_down_t[patch_index]
         batch_input_patch = torch.cat([batch_coords, batch_features], 2).transpose(1, 2)
         batch_output_patch = patch_net(batch_input_patch)
-        
+
         # select patches with positive vertex
         predicted_patch_prob = torch.sigmoid(batch_output_patch.squeeze())
         if predicted_patch_prob.ndim == 0:
@@ -151,67 +155,107 @@ def predict(
         '''third, feed into vertex_net to produce new vertex'''
         batch_output_vertex = vertex_net(batch_input_vertex)
         batch_output_vertex_coord = batch_output_vertex
-        predicted_vertex_list = batch_output_vertex_coord.detach().cpu().numpy()
+        predicted_vertex_list_all = batch_output_vertex_coord.detach().cpu().numpy()
 
-        # NMS to select vertex
+        # NMS to select vertex (fixed: use set for O(1) membership)
         nms_threshhold = vertex_nms_threshold
-        dropped_vertex_index = []
-        for i in range(len(predicted_vertex_list)):
+        dropped_vertex_index = set()
+        for i in range(len(predicted_vertex_list_all)):
             if i in dropped_vertex_index:
                 continue
-            dist_all = np.linalg.norm(predicted_vertex_list-predicted_vertex_list[i], axis=1)
+            dist_all = np.linalg.norm(predicted_vertex_list_all - predicted_vertex_list_all[i], axis=1)
             same_region_indexes = (dist_all < nms_threshhold).nonzero()
             for same_region_i in same_region_indexes[0]:
                 if same_region_i == i:
                     continue
                 if batch_input_vertex_prob[same_region_i] <= batch_input_vertex_prob[i]:
-                    dropped_vertex_index.append(same_region_i)
+                    dropped_vertex_index.add(same_region_i)
                 else:
-                    dropped_vertex_index.append(i)
-        selected_vertex_index = [i for i in range(len(predicted_vertex_list)) if i not in dropped_vertex_index]
+                    dropped_vertex_index.add(i)
+        selected_vertex_index = [i for i in range(len(predicted_vertex_list_all)) if i not in dropped_vertex_index]
         batch_output_vertex_coord = batch_output_vertex_coord[selected_vertex_index]
         batch_input_vertex_prob = np.array(batch_input_vertex_prob, dtype=np.float32)[selected_vertex_index]
 
         predicted_vertex_list = batch_output_vertex_coord.detach().cpu().numpy()
         predicted_vertex_probs = np.array(batch_input_vertex_prob)
 
-        predicted_vertex_features = []
-        for coord in batch_output_vertex_coord.detach():
-            pred_vertex_index = torch.argmin(torch.norm(pc_down_t - coord, dim=1))
-            predicted_vertex_features.append(features[pred_vertex_index])
+        n_vertices = len(predicted_vertex_list)
+        if n_vertices == 0:
+            return np.empty((0, 3)), np.empty((0,)), np.empty((0, 2), dtype=np.int32), np.empty((0,))
 
+        # Find nearest point in pc_down for each predicted vertex (batched)
+        _, nn_indices = kdtree.query(predicted_vertex_list, k=1)
+        nn_indices = np.atleast_1d(nn_indices)
+        predicted_vertex_features = [features[idx] for idx in nn_indices]
 
-        '''forth, feed into line_net to predict lines'''
+        '''fourth, feed into line_net to predict lines — optimized with batched KD-tree'''
         point_num_in_line = 30
         input_line_features = predicted_vertex_features
+
+        # Generate all unique vertex pairs
+        if n_vertices < 2:
+            return predicted_vertex_list, predicted_vertex_probs, np.empty((0, 2), dtype=np.int32), np.empty((0,))
+
+        triu_rows, triu_cols = np.triu_indices(n_vertices, k=1)
+        n_pairs = len(triu_rows)
+
+        # ── Step A: batch midpoint check via KD-tree ──
+        v_np = predicted_vertex_list.astype(np.float64)
+        all_midpoints = (v_np[triu_rows] + v_np[triu_cols]) * 0.5
+        mid_dists, _ = kdtree.query(all_midpoints, k=1)
+        mid_valid = mid_dists < line_dist_threshold
+
+        if not np.any(mid_valid):
+            return predicted_vertex_list, predicted_vertex_probs, np.empty((0, 2), dtype=np.int32), np.empty((0,))
+
+        valid_pairs_i = triu_rows[mid_valid]
+        valid_pairs_j = triu_cols[mid_valid]
+        n_valid = len(valid_pairs_i)
+
+        # ── Step B: batch interpolation check via KD-tree ──
+        # Generate all interpolation points for all valid pairs at once
+        t_vals = (np.arange(1, point_num_in_line + 1, dtype=np.float64) / (point_num_in_line + 1))
+        t_vals = t_vals.reshape(1, point_num_in_line, 1)  # (1, 30, 1)
+
+        v_i = v_np[valid_pairs_i]  # (n_valid, 3)
+        v_j = v_np[valid_pairs_j]  # (n_valid, 3)
+
+        # interp_points[k, p, :] = t[p] * v_i[k] + (1-t[p]) * v_j[k]
+        interp_points = (
+            v_i[:, np.newaxis, :] * t_vals
+            + v_j[:, np.newaxis, :] * (1.0 - t_vals)
+        )  # (n_valid, 30, 3)
+
+        # Flatten to (n_valid * point_num_in_line, 3) for single KD-tree query
+        interp_flat = interp_points.reshape(-1, 3)
+        interp_dists, interp_indices = kdtree.query(interp_flat, k=1)
+        interp_dists = interp_dists.reshape(n_valid, point_num_in_line)
+        interp_indices = interp_indices.reshape(n_valid, point_num_in_line)
+
+        # A pair is valid only if ALL interpolation points are within threshold
+        pair_valid = np.all(interp_dists < line_dist_threshold, axis=1)
+
+        if not np.any(pair_valid):
+            return predicted_vertex_list, predicted_vertex_probs, np.empty((0, 2), dtype=np.int32), np.empty((0,))
+
+        final_i = valid_pairs_i[pair_valid]
+        final_j = valid_pairs_j[pair_valid]
+        final_interp_idx = interp_indices[pair_valid]  # (n_final, point_num_in_line)
+        final_interp_dist = interp_dists[pair_valid]    # (n_final, point_num_in_line)
+        n_final = len(final_i)
+
+        # ── Step C: build line_net inputs ──
         batch_input_line = []
         batch_index_line = []
         batch_index_dist = []
-        for i1, e1 in enumerate(batch_output_vertex_coord):
-            for i2, e2 in enumerate(batch_output_vertex_coord):
-                if i1 >= i2:
-                    continue
-                mid_point_dist = torch.min(torch.norm(pc_down_t - (e1 + e2) / 2.0, dim=1))
-                if mid_point_dist >= line_dist_threshold:
-                    continue
-                tmp_input_line = [input_line_features[i1]]
-                tmp_input_dist = 0
-                valid_line = True
-                for inter_point in range(1, point_num_in_line+1):
-                    inter_point_coord = (float(inter_point)/(point_num_in_line+1)*e1 + (1-float(inter_point)/(point_num_in_line+1))*e2)
-                    inter_point_dist = torch.norm(pc_down_t - inter_point_coord, dim=1)
-                    if torch.min(inter_point_dist) >= line_dist_threshold:
-                        valid_line = False
-                        break
-                    tmp_input_dist += torch.min(inter_point_dist).cpu().item()
-                    inter_point_index = torch.argmin(inter_point_dist)
-                    tmp_input_line.append(features[inter_point_index])
-                if not valid_line:
-                    continue
-                tmp_input_line.append(input_line_features[i2])
-                batch_input_line.append(torch.stack(tmp_input_line))
-                batch_index_line.append([i1+1, i2+1])
-                batch_index_dist.append(tmp_input_dist/point_num_in_line)
+        for k in range(n_final):
+            tmp = [input_line_features[final_i[k]]]
+            for p in range(point_num_in_line):
+                tmp.append(features[final_interp_idx[k, p]])
+            tmp.append(input_line_features[final_j[k]])
+            batch_input_line.append(torch.stack(tmp))
+            batch_index_line.append([final_i[k] + 1, final_j[k] + 1])
+            batch_index_dist.append(float(np.mean(final_interp_dist[k])))
 
         if len(batch_input_line) == 0:
             return predicted_vertex_list, predicted_vertex_probs, np.empty((0, 2), dtype=np.int32), np.empty((0,))
